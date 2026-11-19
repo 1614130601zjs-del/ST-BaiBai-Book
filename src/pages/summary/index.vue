@@ -1032,19 +1032,19 @@ provide(SUMMARY_CTX, {
       </button>
     </div>
 
-    <!-- 未摘要楼层:只列楼层号,点一下单独补摘那一楼;楼层多时可「批量补摘」 -->
+    <!-- 未摘要楼层:点任意楼层会按设置补摘它所在的完整分组;也可批量补摘 -->
     <div v-if="pendingFloors.length" class="bbs-pending">
       <div class="bbs-pending-head">
         <span class="bbs-pending-label" :data-count="pendingFloors.length">
           <Icon name="summary" />未摘要楼层
         </span>
-        <!-- 批量补摘:把全部未摘楼层分块串行补完(省 token、减请求);批量进行中显示进度+取消 -->
+        <!-- 批量补摘:按同一分组设置逐组串行补摘;批量进行中显示进度+取消 -->
         <button
           v-if="!batchState.running"
           class="bbs-btn bbs-btn-sm bbs-batch-btn"
           type="button"
           :disabled="engineState.running || summarizingFloor !== null"
-          title="把全部未摘楼层分批一次性补完(比逐楼省 token、更快)"
+          title="按每组 AI 回复数量设置合并补摘,每组只请求一次"
           @click="openBatchConfirm"
         >
           <Icon name="plans" />批量补摘
@@ -1080,8 +1080,8 @@ provide(SUMMARY_CTX, {
       confirmText="开始"
       @confirm="runBatchBackfill"
     >
-      共 {{ pendingFloors.length }} 个未摘楼层,将按内容量分批、逐批串行补摘(比逐楼省 token、更快)。
-      过程中可随时取消(会在当前这批完成后停下)。继续?
+      共 {{ pendingFloors.length }} 个未摘楼层,将按设置的每组 AI 回复数量合并补摘,每组只请求一次;不足一组的尾部楼层暂不处理。
+      过程中可随时取消(当前组完成后停止)。继续?
     </ConfirmDialog>
 
     <!-- 当前状态 -->
