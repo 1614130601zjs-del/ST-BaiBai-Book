@@ -19,7 +19,7 @@ const original = {
   summaryOnlyMode: settings.apiSettings.summaryOnlyMode,
   injection: { ...settings.apiSettings.injection },
   prompt: settings.apiSettings.prompts.summary,
-  keepRecent: settings.apiSettings.keepRecent,
+  carryoverMessageCount: settings.apiSettings.carryoverMessageCount,
   vector: settings.apiSettings.vector.enabled,
 };
 let seq = 0;
@@ -63,7 +63,7 @@ afterEach(async () => {
   settings.apiSettings.summaryOnlyMode = original.summaryOnlyMode;
   Object.assign(settings.apiSettings.injection, original.injection);
   settings.apiSettings.prompts.summary = original.prompt;
-  settings.apiSettings.keepRecent = original.keepRecent;
+  settings.apiSettings.carryoverMessageCount = original.carryoverMessageCount;
   settings.apiSettings.vector.enabled = original.vector;
 });
 
@@ -344,7 +344,7 @@ describe('实际摘要入口与跨对话继承', () => {
     expect(memory.npcs[0]).toMatchObject({ affinityInner: 2, affinityOuter: -1, affinityNote: '相救表现出更深在意,外在仍冷淡' });
   });
   it('带数据创建新对话保留窗口前未知/中性和窗口内单侧更新,不改源聊天', async () => {
-    settings.apiSettings.keepRecent = 1;
+    settings.apiSettings.carryoverMessageCount = 1;
     const chat = [message({ npcs: { add: [{ name, affinityInner: null, affinityOuter: 0, affinityNote: '尚不知内心' }] } }), patch({ affinityOuter: 1 })];
     const source = useChat(chat);
     const before = JSON.stringify(chat);
