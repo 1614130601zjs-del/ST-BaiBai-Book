@@ -1596,6 +1596,19 @@ function exportPublicApiDocument() {
           新对话从一片「种子叶子」重放还原状态,旧剧情作为摘要随行;若开了向量记忆,旧聊天会被快照,
           新对话可向量召回它的内容(逐次累加,分支也自动继承)。
         </p>
+        <label class="bbs-modal-field">
+          <span class="bbs-modal-label">携带最近消息数</span>
+          <input
+            v-model.number="apiSettings.carryoverMessageCount"
+            class="bbs-input"
+            type="number"
+            min="1"
+            max="200"
+            step="1"
+            @change="apiSettings.carryoverMessageCount = Math.max(1, Math.min(200, Math.floor(Number(apiSettings.carryoverMessageCount) || 2)))"
+          />
+          <span class="bbs-field-hint">默认 2 条,即最新一轮用户与 AI 消息;可设置 1–200 条。</span>
+        </label>
         <div v-if="carryPlan" class="bbs-field-hint">
           将携带:AI {{ carryPlan.aiCount }} 条 / 实际消息 {{ carryPlan.carryCount }} 条;旧剧情摘要 {{ carryPlan.recapLen > 0 ? '有' : '无' }}。
         </div>
@@ -1681,7 +1694,7 @@ function exportPublicApiDocument() {
       confirm-text="创建并切入"
       @confirm="runCarryover"
     >
-      将基于当前聊天创建一个带数据的新对话并切入。继续吗?
+      将基于当前聊天创建一个带数据的新对话并切入,携带最近 {{ apiSettings.carryoverMessageCount }} 条实际消息。继续吗?
     </ConfirmDialog>
     <ConfirmDialog
       v-model:open="migrateConfirmOpen"
