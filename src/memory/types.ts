@@ -322,6 +322,8 @@ export interface LeafExtra {
    * 缺省(旧数据/迁移)按第一页(0)处理。
    */
   swipe?: number;
+  /** 合并摘要覆盖的 AI 楼及其页码;任一成员翻页后整组叶子失效。 */
+  groupSwipes?: Array<{ floor: number; swipe: number }>;
   /** 旧字段:hash(清洗后的 mes)。已废弃(叶子有效性改为楼层/结构匹配,不再比对正文);仅旧数据残留 */
   srcHash?: string;
   /**
