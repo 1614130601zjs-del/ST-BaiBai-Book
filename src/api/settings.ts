@@ -208,6 +208,8 @@ export interface ApiSettings {
   injection: InjectionSections;
   /** 保留最近 N 条 AI 消息发全文(滑动窗口);更早的自动摘要并隐藏 */
   keepRecent: number;
+  /** 带数据创建新对话时,额外携带的最近实际消息条数(用户+AI),默认 2。 */
+  carryoverMessageCount: number;
   /** 排除的角色名:这些名字(含重名卡)的聊天里,记忆系统所有功能都不生效 */
   excludedChars: string[];
   /** 摘要/总结时**整本排除**的世界书文件名:这些书的所有激活条目都不进摘要上下文。
@@ -350,6 +352,7 @@ function defaults(): ApiSettings {
     summaryOnlyMode: false,
     injection: { sceneFocus: true, lifeDetails: true, protagonist: true, npcs: true, npcAffinity: true, items: true, scenes: true, knowledge: true },
     keepRecent: 3,
+    carryoverMessageCount: 2,
     excludedChars: [],
     excludedWorldNames: [],
     // 空起步:内置默认规则(DEFAULT_WI_PATTERNS)由 hydrateSettings「播种」发放,只发一次。
@@ -472,6 +475,11 @@ function normalize(raw: unknown): ApiSettings {
     Number.isFinite(merged.recentResolvedPlansCount) && merged.recentResolvedPlansCount >= 0
       ? Math.floor(merged.recentResolvedPlansCount)
       : 5;
+  // 带数据创建新对话的消息数:正整数,旧配置默认最近一轮(2 条),最多 200 条。
+  merged.carryoverMessageCount =
+    Number.isFinite(merged.carryoverMessageCount) && merged.carryoverMessageCount >= 1
+      ? Math.min(200, Math.floor(merged.carryoverMessageCount))
+      : 2;
   // 自动摘要分组:正整数,旧数据缺失时默认 1,保持旧版逐楼行为。
   merged.autoSummaryGroupSize =
     Number.isFinite(merged.autoSummaryGroupSize) && merged.autoSummaryGroupSize >= 1
@@ -610,6 +618,7 @@ function applyInto(target: ApiSettings, src: ApiSettings): void {
   target.summaryOnlyMode = src.summaryOnlyMode;
   target.injection = src.injection;
   target.keepRecent = src.keepRecent;
+  target.carryoverMessageCount = src.carryoverMessageCount;
   target.excludedChars = src.excludedChars;
   target.excludedWorldNames = src.excludedWorldNames;
   target.excludedWorldInfoPatterns = src.excludedWorldInfoPatterns;
