@@ -572,7 +572,9 @@ export async function handleGenerationIntercept(
   // 否则主模型与开场白摘要会各自凭空编一个开场时间,导致正文与摘要时间对不上(用户实测)。
   // 摘完(或失败退化)即继续放行——开场白摘要失败不该挡住用户开始游戏。
   // 正在翻页/重生成的末楼尚未定稿,即使是真开场白也不能摘旧页来建立锚点。
-  const opening = skipLastAi ? -1 : openingPendingFloor(chat);
+  // N>1 时开场白也必须等待凑满一组,不能绕过分组规则单独请求。
+  const configuredGroupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
+  const opening = skipLastAi || configuredGroupSize > 1 ? -1 : openingPendingFloor(chat);
   if (opening >= 0) {
     const inflight = currentSummaryPromise();
     if (inflight) {
@@ -586,7 +588,7 @@ export async function handleGenerationIntercept(
   }
 
   // 分组模式下,未凑满 N 条是正常积累;凑满后整组完成摘要才放行,失败则拦截。
-  const groupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
+  const groupSize = configuredGroupSize;
   if (groupSize > 1) {
     const ceiling = prevAiFloor(chat, skipLastAi);
     const eligible = pendingAiFloors(chat).filter(f => f <= ceiling);
@@ -695,10 +697,13 @@ export async function checkAutoSummary(): Promise<void> {
   const chat = ctx.chat ?? [];
   if (chat.length === 0) { console.log('[柏宝书] 早退:chat 为空'); return; }
 
+  const groupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
   const floors = pendingAiFloors(chat);
-  console.log('[柏宝书] 待摘要楼层 =', floors);
-  for (const floor of floors) {
-    await runSummary(floor);
+  console.log('[柏宝书] 待摘要楼层 =', floors, '合并组大小 =', groupSize);
+  // 全量补摘与自动摘要共用同一分组:每组只发一次普通摘要请求,尾部不足一组的楼层保留待摘。
+  for (let i = 0; i + groupSize <= floors.length; i += groupSize) {
+    const groupFloors = floors.slice(i, i + groupSize);
+    await runSummary(groupFloors[groupFloors.length - 1], { groupFloors });
   }
   await afterSummaryHideAndInject(chat);
 }
@@ -715,7 +720,17 @@ export async function summarizeFloor(floor: number): Promise<void> {
   const chat = ctx.chat ?? [];
   if (importedHistoryCovers(floor)) return;
   if (!isAiFloor(chat[floor]) || leafValid(chat[floor])) return;
-  await runSummary(floor);
+  const groupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
+  const pending = pendingAiFloors(chat);
+  const position = pending.indexOf(floor);
+  if (position < 0) return;
+  const groupStart = Math.floor(position / groupSize) * groupSize;
+  const groupFloors = pending.slice(groupStart, groupStart + groupSize);
+  if (groupFloors.length !== groupSize) {
+    toast('当前分组还不足 ' + groupSize + ' 条 AI 回复,暂不生成摘要。', 'info');
+    return;
+  }
+  await runSummary(groupFloors[groupFloors.length - 1], { groupFloors });
   await afterSummaryHideAndInject(chat);
 }
 
@@ -736,7 +751,11 @@ export async function regenerateFloor(floor: number): Promise<boolean> {
   if (!oldLeaf) return false;
 
   try {
-    await runSummary(floor, { replaceLeaf: oldLeaf, checkResummary: false });
+    // 已有合并叶子按原记录的成员重摘,不把它拆回逐楼请求。
+    const groupFloors = oldLeaf.groupSwipes?.length
+      ? oldLeaf.groupSwipes.map(member => member.floor).sort((a, b) => a - b)
+      : [floor];
+    await runSummary(floor, { replaceLeaf: oldLeaf, groupFloors, checkResummary: false });
     return getLeaf(chat[floor]) !== oldLeaf && !engineState.lastError;
   } finally {
     await afterSummaryHideAndInject(chat);
@@ -1477,16 +1496,24 @@ export async function batchBackfill(opts: BatchBackfillOpts = {}): Promise<Batch
   const chat = ctx.chat ?? [];
 
   // 目标楼层:显式传入则过滤成「当前确实待摘的 AI 楼」(防陈旧),否则取全部待摘
-  const pending = new Set(pendingAiFloors(chat));
-  const floors = (opts.floors ?? [...pending]).filter(f => pending.has(f)).sort((a, b) => a - b);
+  const pendingFloors = pendingAiFloors(chat);
+  const selected = new Set(opts.floors ?? pendingFloors);
+  const groupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
+  // 只处理完整且被本次选择完整覆盖的组,绝不把组拆开,也不把尾组退回逐楼请求。
+  const groups: number[][] = [];
+  for (let i = 0; i + groupSize <= pendingFloors.length; i += groupSize) {
+    const group = pendingFloors.slice(i, i + groupSize);
+    if (group.every(f => selected.has(f))) groups.push(group);
+  }
+  const floors = groups.flat();
   const total = floors.length;
   if (total === 0) {
+    if (pendingFloors.length) toast('待摘楼层尚未凑满 ' + groupSize + ' 条 AI 回复,暂不发起摘要请求。', 'info');
     await afterSummaryHideAndInject(chat);
     return { done: 0, total: 0, cancelled: false };
   }
 
-  const batches = planBatches(chat, floors, apiSettings.batchMaxChars, apiSettings.batchMaxFloors);
-  console.log('[柏宝书] 批量补摘:', total, '楼 →', batches.length, '批,', sender.label);
+  console.log('[柏宝书] 批量补摘:', total, '楼 →', groups.length, '组,每组', groupSize, '条,', sender.label);
 
   busy = true;
   engineState.running = true;
@@ -1499,24 +1526,17 @@ export async function batchBackfill(opts: BatchBackfillOpts = {}): Promise<Batch
   let done = 0;
   let cancelled = false;
   try {
-    for (const block of batches) {
+    for (const groupFloors of groups) {
       if (batchState.cancelRequested) { cancelled = true; break; }
       try {
-        await summarizeBatchWork(chat, block, sender);
+        // 与自动/手动摘要走同一套提示词和落叶逻辑;一组只发一次请求,只在组末楼落一片叶子。
+        await summarizeFloorWork(chat, groupFloors[groupFloors.length - 1], sender, { groupFloors });
+        done += groupFloors.length;
       } catch (e) {
-        // 整块失败(已含重试)→ 回退:逐楼单独摘。单楼也可能失败(写 lastError),失败楼留作待摘,不中断后续。
-        console.log('[柏宝书] 批量块失败,回退逐楼:', e instanceof Error ? e.message : String(e));
-        for (const f of block) {
-          if (!isAiFloor(chat[f]) || leafValid(chat[f])) continue; // 已被填或非 AI 楼:跳过
-          try {
-            await summarizeFloorWork(chat, f, sender);
-          } catch (e2) {
-            engineState.lastError = e2 instanceof Error ? e2.message : String(e2);
-          }
-        }
+        // 失败组原样保留待摘,绝不降级成逐楼请求,避免请求频率反弹。
+        engineState.lastError = e instanceof Error ? e.message : String(e);
+        console.log('[柏宝书] 合并补摘组失败,保留待摘:', groupFloors, engineState.lastError);
       }
-      // 本块产出的已落叶楼计入进度(只数确实落上叶子的,失败楼不计)
-      done = floors.filter(f => leafValid(chat[f])).length;
       batchState.done = done;
     }
     // 连锁触发总结(可能跨多层),失败写 lastError 不影响已落叶子
