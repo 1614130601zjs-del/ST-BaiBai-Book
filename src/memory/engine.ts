@@ -755,7 +755,7 @@ export async function regenerateFloor(floor: number): Promise<boolean> {
     const groupFloors = oldLeaf.groupSwipes?.length
       ? oldLeaf.groupSwipes.map(member => member.floor).sort((a, b) => a - b)
       : [floor];
-    await runSummary(floor, { replaceLeaf: oldLeaf, groupFloors, checkResummary: false });
+    await runSummary(groupFloors[groupFloors.length - 1], { replaceLeaf: oldLeaf, groupFloors, checkResummary: false });
     return getLeaf(chat[floor]) !== oldLeaf && !engineState.lastError;
   } finally {
     await afterSummaryHideAndInject(chat);
