@@ -165,11 +165,13 @@ describe('summary request roles', () => {
   const originalBatch = {
     batchMaxFloors: settings.apiSettings.batchMaxFloors,
     batchMaxChars: settings.apiSettings.batchMaxChars,
+    autoSummaryGroupSize: settings.apiSettings.autoSummaryGroupSize,
   };
 
   beforeEach(() => {
     Object.assign(settings.apiSettings.prompts, { summary: '', resummary: '', resummary2: '' });
-    Object.assign(settings.apiSettings, { batchMaxFloors: 2, batchMaxChars: 10000 });
+    // 这组批量请求测试使用两条楼层作为一组,显式设置以免依赖用户默认配置。
+    Object.assign(settings.apiSettings, { batchMaxFloors: 2, batchMaxChars: 10000, autoSummaryGroupSize: 2 });
   });
 
   afterEach(() => {
