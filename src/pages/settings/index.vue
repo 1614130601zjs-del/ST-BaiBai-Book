@@ -940,6 +940,11 @@ function exportPublicApiDocument() {
           <input v-model="apiSettings.autoSummaryEnabled" type="checkbox" class="bbs-checkbox" />
         </label>
         <p class="bbs-field-hint">开启后自动摘要并隐藏旧楼,同时启用正文时间标签(剧情时间锚点)与积压拦截(漏摘时拦截发送、提示补摘)。</p>
+        <label class="bbs-num-row">
+          <span class="bbs-field-label">每几条 AI 回复合并摘要</span>
+          <input v-model.number="apiSettings.autoSummaryGroupSize" class="bbs-input bbs-num" type="number" min="1" max="50" step="1" />
+        </label>
+        <p class="bbs-field-hint">累计到设定数量后,把这几条 AI 回复合并成一条摘要,只调用一次摘要 API。未凑满时暂不摘要;填 1 则保持原来的逐楼摘要。</p>
         <div class="bbs-num-row">
           <span class="bbs-field-label">字数档位</span>
           <BbsSelect v-model="apiSettings.verbosity" :options="VERBOSITY_OPTIONS" class="bbs-select-narrow" aria-label="字数档位" />
