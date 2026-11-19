@@ -170,8 +170,8 @@ describe('summary request roles', () => {
 
   beforeEach(() => {
     Object.assign(settings.apiSettings.prompts, { summary: '', resummary: '', resummary2: '' });
-    // 这组批量请求测试使用两条楼层作为一组,显式设置以免依赖用户默认配置。
-    Object.assign(settings.apiSettings, { batchMaxFloors: 2, batchMaxChars: 10000, autoSummaryGroupSize: 2 });
+    // 普通单楼测试默认逐楼;批量分组用例会在各自测试中显式设为 2。
+    Object.assign(settings.apiSettings, { batchMaxFloors: 2, batchMaxChars: 10000, autoSummaryGroupSize: 1 });
   });
 
   afterEach(() => {
@@ -384,66 +384,49 @@ describe('summary request roles', () => {
     expect(planBatches(chat, [1, 3], 10000, 10)).toEqual([[1, 3]]);
   });
 
-  it('sends batch instructions separately, retaining floor order and clean stored summaries', async () => {
+  it('groups configured AI replies into one summary and stores it on the final floor', async () => {
+    settings.apiSettings.autoSummaryGroupSize = 2;
     const chat = [
       message(true), message(),
       message(true, { mes: 'Continue the story.' }), message(false, { mes: 'The second response.' }),
     ];
     useChat(chat);
-    const floors = [1, 2].map(n => ({ ...summary, n, summary: `Verified floor ${n}.` }));
     vi.mocked(client.requestViaMainApi).mockResolvedValue(
-      `<thinking>Per-floor source records.</thinking>${JSON.stringify({ floors })}`,
+      `<thinking>Both replies are summarized together.</thinking>${JSON.stringify({ ...summary, summary: 'Both replies, one summary.' })}`,
     );
 
     expect(await batchBackfill({ floors: [1, 3] })).toMatchObject({ done: 2, total: 2, cancelled: false });
-
     expect(client.requestViaMainApi).toHaveBeenCalledOnce();
-    // 批量请求过去是全局唯一漏掉 NVWA 核心的路径;确保破限位仍带核心且只带一次。
-    const allBatch = vi.mocked(client.requestViaMainApi).mock.calls[0][0];
-    expect(allBatch.filter(m => m.content.includes('<nvwa_standalone_core>'))).toHaveLength(1);
-    expect(allBatch[0].content).toContain('<nvwa_standalone_core>');
-    const tail = vi.mocked(client.requestViaMainApi).mock.calls[0][0].slice(-3);
-    const thinking = buildBatchThinking(2);
-    expect(tail).toEqual([
-      { role: 'system', content: expect.stringContaining('长度必须等于 2') },
-      { role: 'user', content: expect.stringContaining('The second response.') },
-      { role: 'system', content: thinking },
-    ]);
-    expect(tail[0].content).not.toContain('The first response.');
-    expect(tail[0].content).toContain(COMPOSITION_HEADING);
-    expect(tail[1].content).not.toContain('【批量任务说明(关键)】');
-    expect(tail[1].content).toContain('━━ 第 1 楼 ━━\n【用户·User】\n[M1-P1] Start the story.');
-    expect(tail[1].content).toContain('[M2-P1] The first response.');
-    expect(tail[1].content).toContain('━━ 第 2 楼 ━━\n【用户·User】\n[M3-P1] Continue the story.');
-    expect(tail[1].content).toContain('[M4-P1] The second response.');
-    expect(tail[1].content.match(/\[M\d+-P\d+\]/g)).toEqual(['[M1-P1]', '[M2-P1]', '[M3-P1]', '[M4-P1]']);
-    expect(tail[1].content.indexOf('The first response.')).toBeLessThan(tail[1].content.indexOf('The second response.'));
-    expect([chat[1], chat[3]].map(m => m.extra?.bbs_leaf?.text)).toEqual(floors.map(f => f.summary));
+    const messages = vi.mocked(client.requestViaMainApi).mock.calls[0][0];
+    expect(messages.filter(m => m.content.includes('<nvwa_standalone_core>'))).toHaveLength(1);
+    expect(messages.at(-2)?.content).toContain('[M2-P1] The first response.');
+    expect(messages.at(-2)?.content).toContain('[M4-P1] The second response.');
+    expect(chat[1].extra?.bbs_leaf).toBeUndefined();
+    expect(chat[3].extra?.bbs_leaf?.text).toBe('Both replies, one summary.');
+    expect(chat[3].extra?.bbs_leaf?.groupSwipes?.map(item => item.floor)).toEqual([1, 3]);
   });
 
-  it('keeps each batch reminder inside its own floor with original message IDs', async () => {
+  it('keeps source reminders tied to original message IDs in grouped summaries', async () => {
+    settings.apiSettings.autoSummaryGroupSize = 2;
     const bodies = ['风速超过九级，气温降到零下三十三度。', '她已经搬出旧居，生活条件改善了。'];
     const chat = [
       message(true), message(false, { mes: bodies[0] }),
       message(true), message(false, { mes: bodies[1] }),
     ];
     useChat(chat);
-    const floors = [1, 2].map(n => ({ ...summary, n, summary: `Verified floor ${n}.` }));
-    vi.mocked(client.requestViaMainApi).mockResolvedValue(JSON.stringify({ floors }));
+    vi.mocked(client.requestViaMainApi).mockResolvedValue(JSON.stringify({
+      ...summary, summary: 'Grouped summary.',
+    }));
 
     expect(await batchBackfill({ floors: [1, 3] })).toMatchObject({ done: 2 });
-
     expect(client.requestViaMainApi).toHaveBeenCalledOnce();
     const material = vi.mocked(client.requestViaMainApi).mock.calls[0][0].at(-2)!.content;
-    const [first, second] = material.split('━━ 第 2 楼 ━━');
-    expect(first.split(SOURCE_HINTS_HEADER)).toHaveLength(2);
-    expect(second.split(SOURCE_HINTS_HEADER)).toHaveLength(2);
-    expect(first.split(SOURCE_HINTS_HEADER)[1]).toContain(`[M2-P1] ${bodies[0]}`);
-    expect(first).not.toContain('[M4-P1]');
-    expect(second.split(SOURCE_HINTS_HEADER)[1]).toContain(`[M4-P1] ${bodies[1]}`);
-    expect(second).not.toContain('[M2-P1]');
+    expect(material).toContain(`[M2-P1] ${bodies[0]}`);
+    expect(material).toContain(`[M4-P1] ${bodies[1]}`);
+    expect(material).toContain(SOURCE_HINTS_HEADER);
     expect([chat[1], chat[3]].map(m => m.mes)).toEqual(bodies);
-    expect([chat[1], chat[3]].map(m => m.extra?.bbs_leaf?.text)).toEqual(floors.map(f => f.summary));
+    expect(chat[1].extra?.bbs_leaf).toBeUndefined();
+    expect(chat[3].extra?.bbs_leaf?.text).toBe('Grouped summary.');
   });
 });
 
