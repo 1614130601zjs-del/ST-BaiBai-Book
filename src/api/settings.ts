@@ -197,6 +197,8 @@ export interface ApiSettings {
   assignments: Record<TaskType, string>;
   /** 自动摘要开关。开启即一并启用:自动隐藏、正文时间标签、积压拦截(不再各自独立开关)。 */
   autoSummaryEnabled: boolean;
+  /** 每 N 条 AI 回复合并为一条摘要;1=保持旧版逐楼摘要。 */
+  autoSummaryGroupSize: number;
   /**
    * 仅摘要模式。继续分析、保存结构化状态,但不向主模型注入当前状态,
    * 也不再把物品/变量变动旁注写回正文。已有正文旁注不主动清理。
@@ -344,6 +346,7 @@ function defaults(): ApiSettings {
     channels: [],
     assignments: { summary: '', resummary: '' },
     autoSummaryEnabled: true,
+    autoSummaryGroupSize: 1,
     summaryOnlyMode: false,
     injection: { sceneFocus: true, lifeDetails: true, protagonist: true, npcs: true, npcAffinity: true, items: true, scenes: true, knowledge: true },
     keepRecent: 3,
@@ -469,6 +472,11 @@ function normalize(raw: unknown): ApiSettings {
     Number.isFinite(merged.recentResolvedPlansCount) && merged.recentResolvedPlansCount >= 0
       ? Math.floor(merged.recentResolvedPlansCount)
       : 5;
+  // 自动摘要分组:正整数,旧数据缺失时默认 1,保持旧版逐楼行为。
+  merged.autoSummaryGroupSize =
+    Number.isFinite(merged.autoSummaryGroupSize) && merged.autoSummaryGroupSize >= 1
+      ? Math.min(50, Math.floor(merged.autoSummaryGroupSize))
+      : 1;
   // 重试次数:非负整数,旧数据缺失/非法回退默认 1
   merged.summaryMaxRetries =
     Number.isFinite(merged.summaryMaxRetries) && merged.summaryMaxRetries >= 0
@@ -598,6 +606,7 @@ function applyInto(target: ApiSettings, src: ApiSettings): void {
   target.channels = src.channels;
   target.assignments = src.assignments;
   target.autoSummaryEnabled = src.autoSummaryEnabled;
+  target.autoSummaryGroupSize = src.autoSummaryGroupSize;
   target.summaryOnlyMode = src.summaryOnlyMode;
   target.injection = src.injection;
   target.keepRecent = src.keepRecent;
