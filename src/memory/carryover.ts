@@ -363,8 +363,9 @@ export async function createNewChatWithCarryover(): Promise<boolean> {
       createdAt: Date.now(),
     };
     if (sourceChatId && targetChatFile && sourceCharacterAvatar) {
-      const targetMetadata = targetCtx.chatMetadata as Record<string, unknown>;
+      const targetMetadata = (targetCtx.chatMetadata ?? {}) as Record<string, unknown>;
       targetMetadata.archive_carryover = archiveCarryover;
+      (targetCtx as unknown as { chatMetadata: Record<string, unknown> }).chatMetadata = targetMetadata;
     }
 
     // 确保有 #0 锚点楼:种子叶子(承载全量状态 delta + 合并摘要文本)必须挂在一条 #0 上。
