@@ -579,6 +579,15 @@ export async function handleGenerationIntercept(
     // 摘要落盘后 refreshInjection 已把「当前时间」刷成开场白时间;继续走洞判定(通常放行)。
   }
 
+  // 分组模式下,未凑满 N 条是正常积累,不按旧的逐楼缺口规则拦截。
+  const groupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
+  if (groupSize > 1) {
+    const inflight = currentSummaryPromise();
+    if (inflight) await inflight;
+    else await maybeSummarizePrevAi(skipLastAi, true);
+    return false;
+  }
+
   let holes = holesExceptLast(chat);
   if (holes.length < 1) {
     // 确保最新稳定 AI 楼已进入后台摘要;只有聊天末尾实际是 AI 时才跳过正在改写的末楼。
@@ -780,30 +789,21 @@ export async function maybeSummarizePrevAi(
   if (!ctx) return;
   if (chat.length === 0) return;
 
-  const holes = holesExceptLast(chat);
-  if (holes.length > 1) {
-    console.log('[柏宝书] 多个摘要缺口,停止自动补摘,交由用户手动处理:', holes);
-    return;
-  }
-
-  // 可摘范围上界:发消息=最后一条 AI;翻页/重生=之前那条 AI(末尾易变,排除)。
+  // 按用户设置聚合待摘要 AI 回复;不足一组时先积累,不发单楼请求。
   const ceiling = prevAiFloor(chat, skipLastAi);
   if (ceiling < 0) return;
-
-  // 范围内最早的待摘 AI 楼(洞优先);没有则仅跑收尾(隐藏窗口可能变化)。
-  const pending = pendingAiFloors(chat);
-  const target = pending.find(f => f <= ceiling);
-  if (target === undefined) {
-    await afterSummaryHideAndInject(chat);
-    return;
-  }
+  const groupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
+  const pending = pendingAiFloors(chat).filter(f => f <= ceiling);
+  if (pending.length < groupSize) return;
+  const groupFloors = pending.slice(0, groupSize);
+  const target = groupFloors[groupFloors.length - 1];
 
   if (waitUntilRequestStarts) {
     let markStarted: () => void = () => {};
     const started = new Promise<'request-started'>(resolve => {
       markStarted = () => resolve('request-started');
     });
-    const run = runSummary(target, { onRequestStart: markStarted });
+    const run = runSummary(target, { groupFloors, onRequestStart: markStarted });
     void run
       .then(async () => {
         await afterSummaryHideAndInject(chat);
@@ -819,7 +819,7 @@ export async function maybeSummarizePrevAi(
     return;
   }
 
-  await runSummary(target);
+  await runSummary(target, { groupFloors });
   await afterSummaryHideAndInject(chat);
 }
 
@@ -1010,6 +1010,8 @@ async function sendAndParse<T>(
  */
 interface RunSummaryOptions {
   replaceLeaf?: LeafExtra;
+  /** 自动摘要分组;整组只在最后一楼落一片叶子。 */
+  groupFloors?: number[];
   checkResummary?: boolean;
   /** 内部启动屏障:摘要上下文准备完毕、即将调用 API 时触发。 */
   onRequestStart?: () => void;
@@ -1133,7 +1135,7 @@ async function summarizeFloorWork(
   chat: STMessage[],
   aiFloor: number,
   sender: { send: (messages: ChatMsg[]) => Promise<string>; label: string },
-  options: Pick<RunSummaryOptions, 'replaceLeaf' | 'onRequestStart'> = {},
+  options: Pick<RunSummaryOptions, 'replaceLeaf' | 'onRequestStart' | 'groupFloors'> = {},
 ): Promise<void> {
   const ctx = getContext();
   if (!ctx) throw new Error('无 ST 上下文');
@@ -1141,12 +1143,22 @@ async function summarizeFloorWork(
     throw new Error(`摘要失败:楼层 #${aiFloor} 已不存在(可能在请求期间被删除)`);
   }
 
+  const groupFloors = [...new Set(options.groupFloors?.length ? options.groupFloors : [aiFloor])].sort((a, b) => a - b);
+  const firstFloor = groupFloors[0];
+  const lastFloor = groupFloors[groupFloors.length - 1];
+  if (groupFloors.some(f => !isAiFloor(chat[f]))) throw new Error('合并摘要失败:分组中有楼层已不存在或不再是 AI 回复');
   const covered = options.replaceLeaf ? coveredBeforeFloor(chat, aiFloor) : coveredSet(chat);
-  const targets = floorTargets(chat, aiFloor, covered);
+  const targets = groupFloors.length === 1
+    ? floorTargets(chat, aiFloor, covered)
+    : Array.from({ length: lastFloor - firstFloor + 1 }, (_, i) => firstFloor + i)
+        .filter(i => !!chat[i] && !covered.has(i) && !chat[i].extra?.bbs_omit);
+  if (!targets.length) throw new Error('合并摘要失败:没有可分析的未覆盖楼层');
   const content = renderMessages(chat, targets, ctx.name1, ctx.name2);
 
   // 两端标签齐才算「有标签」,提示词据此免去 AI 算时间。
-  const tag = parseTimeRange(clampToTimeTags(chat[aiFloor].mes));
+  const firstTag = parseTimeRange(clampToTimeTags(chat[firstFloor].mes));
+  const lastTag = parseTimeRange(clampToTimeTags(chat[lastFloor].mes));
+  const tag = { start: firstTag.start || lastTag.start, end: lastTag.end || firstTag.end };
   const hasTimeTags = !!(tag.start && tag.end);
 
   // 截止到「被分析楼段之前」的状态与历史(不泄漏未来:重摘早期楼时排除其后叶子)
@@ -1221,7 +1233,12 @@ async function summarizeFloorWork(
     return { ...d, summary } as SummaryDelta & { summary: string };
   });
 
-  applyLeafForFloor(chat, aiFloor, delta, stateBefore, options.replaceLeaf, knowledgeShown);
+  // 整组只落一片叶子,挂在最后一条 AI 回复上;覆盖区间会自然包含组内前面楼层。
+  applyLeafForFloor(chat, lastFloor, {
+    ...delta,
+    timeStart: delta.timeStart || tag.start || undefined,
+    timeEnd: delta.timeEnd || tag.end || undefined,
+  }, stateBefore, options.replaceLeaf, knowledgeShown);
   engineState.lastRunAt = Date.now();
 
   // 立刻反映到派生与注入;落盘走防抖(隐藏由收尾的 syncWindowHiddenState 统一负责)
@@ -1243,7 +1260,8 @@ async function runSummaryInner(aiFloor: number, options: RunSummaryOptions = {})
   const ctx = getContext();
   if (!ctx) return;
   const chat = ctx.chat ?? [];
-  if (!isAiFloor(chat[aiFloor])) { console.log('[柏宝书] runSummary 早退:非 AI 楼', aiFloor); return; }
+  const groupFloors = options.groupFloors?.length ? options.groupFloors : [aiFloor];
+  if (groupFloors.some(f => !isAiFloor(chat[f]))) { console.log('[柏宝书] runSummary 早退:分组中有非 AI 楼', groupFloors); return; }
   if (options.replaceLeaf && getLeaf(chat[aiFloor]) !== options.replaceLeaf) {
     engineState.lastError = `重新摘要失败:楼层 #${aiFloor} 的原摘要已发生变化`;
     return;
