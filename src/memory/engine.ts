@@ -579,13 +579,21 @@ export async function handleGenerationIntercept(
     // 摘要落盘后 refreshInjection 已把「当前时间」刷成开场白时间;继续走洞判定(通常放行)。
   }
 
-  // 分组模式下,未凑满 N 条是正常积累,不按旧的逐楼缺口规则拦截。
+  // 分组模式下,未凑满 N 条是正常积累;凑满后整组完成摘要才放行,失败则拦截。
   const groupSize = Math.max(1, Math.min(50, Math.floor(apiSettings.autoSummaryGroupSize || 1)));
   if (groupSize > 1) {
+    const ceiling = prevAiFloor(chat, skipLastAi);
+    const eligible = pendingAiFloors(chat).filter(f => f <= ceiling);
+    if (eligible.length < groupSize) return false;
+    const groupFloors = eligible.slice(0, groupSize);
     const inflight = currentSummaryPromise();
     if (inflight) await inflight;
-    else await maybeSummarizePrevAi(skipLastAi, true);
-    return false;
+    else await maybeSummarizePrevAi(skipLastAi);
+    const summaryFloor = groupFloors[groupFloors.length - 1];
+    if (leafValid(chat[summaryFloor])) return false;
+    abort(true);
+    toast('合并摘要失败,本次生成已拦截。请检查摘要 API 后重试。', 'error');
+    return true;
   }
 
   let holes = holesExceptLast(chat);
