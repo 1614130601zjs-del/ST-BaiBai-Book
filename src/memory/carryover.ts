@@ -273,6 +273,11 @@ export async function createNewChatWithCarryover(): Promise<boolean> {
     return false;
   }
   const sourceChat = ctx.chat ?? [];
+  const sourceCharacter = ctx.characters?.[Number(ctx.characterId)] ?? null;
+  const sourceCharacterAvatar = String(sourceCharacter?.avatar ?? '');
+  const sourceCharacterName = String(sourceCharacter?.name ?? ctx.name2 ?? '');
+  const sourceCharacterId = String(ctx.characterId ?? '');
+  const sourceMessageId = Math.max(0, sourceChat.length - 1);
   if (!sourceChat.length) {
     toast('当前对话没有可携带的数据', 'warning');
     return false;
@@ -347,6 +352,20 @@ export async function createNewChatWithCarryover(): Promise<boolean> {
     const targetCtx = getContext();
     if (!targetCtx) throw new Error('新对话上下文不可用');
     const targetChat = targetCtx.chat ?? [];
+    const targetChatFile = targetCtx.getCurrentChatId?.() ?? targetCtx.chatId ?? null;
+    const archiveCarryover = {
+      version: 1,
+      sourceChatFile: sourceChatId,
+      sourceMessageId,
+      characterAvatar: sourceCharacterAvatar,
+      characterName: sourceCharacterName,
+      characterId: sourceCharacterId,
+      createdAt: Date.now(),
+    };
+    if (sourceChatId && targetChatFile && sourceCharacterAvatar) {
+      const targetMetadata = targetCtx.chatMetadata as Record<string, unknown>;
+      targetMetadata.archive_carryover = archiveCarryover;
+    }
 
     // 确保有 #0 锚点楼:种子叶子(承载全量状态 delta + 合并摘要文本)必须挂在一条 #0 上。
     // 卡有开场白 → 复用 #0 当锚点(清空正文、设系统楼,删其余开场白);
@@ -421,6 +440,25 @@ export async function createNewChatWithCarryover(): Promise<boolean> {
     flushLeavesNow();
     await targetCtx.saveChat();
     if (typeof targetCtx.saveMetadata === 'function') await targetCtx.saveMetadata();
+    try {
+      const archiveApi = (globalThis as Record<string, unknown>).ArchiveManager as {
+        registerCarryoverChat?: (payload: Record<string, unknown>) => boolean;
+      } | undefined;
+      if (typeof archiveApi?.registerCarryoverChat === 'function' && targetChatFile && sourceChatId && sourceCharacterAvatar) {
+        archiveApi.registerCarryoverChat({
+          chatFile: targetChatFile,
+          sourceChatFile: sourceChatId,
+          sourceMessageId,
+          characterAvatar: sourceCharacterAvatar,
+          characterName: sourceCharacterName,
+          characterId: sourceCharacterId,
+          createdAt: archiveCarryover.createdAt,
+          name: '柏宝书新对话',
+        });
+      }
+    } catch (archiveError) {
+      console.warn('[柏宝书] 通知档案登记新对话失败；原生聊天元数据已保留，可在档案下次读取时恢复：', archiveError);
+    }
     if (typeof targetCtx.reloadCurrentChat === 'function') await targetCtx.reloadCurrentChat();
     refreshInjection();
 
