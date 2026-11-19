@@ -18,6 +18,8 @@ import {
   type PromptMacro,
 } from '@/memory/prompts';
 import { TIME_TAG_PROMPT } from '@/memory/timeTag';
+import { pendingAiFloors } from '@/memory/engine';
+import { derivedMeta } from '@/memory/store';
 import { clearVectorIndex, syncVectorIndex } from '@/memory/vector';
 import { resetVectorStoreProbe, vectorBackendKind } from '@/memory/vector/store';
 import { checkForUpdate, performUpdate, updateState } from '@/memory/update';
@@ -50,6 +52,25 @@ const REASONING_EFFORT_OPTIONS = [
   { value: 'xhigh', label: 'xhigh' },
   { value: 'max', label: 'max' },
 ];
+
+/** 当前聊天的待摘要分组进度。依赖 derivedMeta.rev，在楼层摘要/聊天变动后刷新。 */
+const summaryGroupProgress = computed(() => {
+  void derivedMeta.rev;
+  const chat = getContext()?.chat ?? [];
+  const groupSize = Math.max(1, Math.min(50, Math.floor(Number(apiSettings.autoSummaryGroupSize) || 1)));
+  const pending = pendingAiFloors(chat).length;
+  if (groupSize <= 1) {
+    return pending > 0 ? `当前有 ${pending} 条 AI 回复待摘要（逐楼处理）。` : '当前没有待摘要的 AI 回复。';
+  }
+  const completeGroups = Math.floor(pending / groupSize);
+  const remainder = pending % groupSize;
+  if (completeGroups > 0) {
+    return remainder > 0
+      ? `当前有 ${pending} 条 AI 回复待摘要：已凑满 ${completeGroups} 组，另有 ${remainder}/${groupSize} 条在累计。`
+      : `当前有 ${pending} 条 AI 回复待摘要，已凑满 ${completeGroups} 组。`;
+  }
+  return `当前已累计 ${remainder}/${groupSize} 条 AI 回复，凑满 ${groupSize} 条后合并生成一条摘要。`;
+});
 
 const VERBOSITY_OPTIONS: { value: Verbosity; label: string }[] = [
   { value: 'detailed', label: '详细' },
@@ -945,6 +966,7 @@ function exportPublicApiDocument() {
           <input v-model.number="apiSettings.autoSummaryGroupSize" class="bbs-input bbs-num" type="number" min="1" max="50" step="1" />
         </label>
         <p class="bbs-field-hint">累计到设定数量后,把这几条 AI 回复合并成一条摘要,只调用一次摘要 API。未凑满时暂不摘要;填 1 则保持原来的逐楼摘要。</p>
+        <p class="bbs-field-hint" aria-live="polite">{{ summaryGroupProgress }}</p>
         <div class="bbs-num-row">
           <span class="bbs-field-label">字数档位</span>
           <BbsSelect v-model="apiSettings.verbosity" :options="VERBOSITY_OPTIONS" class="bbs-select-narrow" aria-label="字数档位" />
