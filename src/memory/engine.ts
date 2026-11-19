@@ -462,8 +462,14 @@ function importedHistoryCovers(floor: number): boolean {
 export function pendingAiFloors(chat: STMessage[]): number[] {
   const out: number[] = [];
   const imported = importedHistoryRanges();
+  const groupedCovered = new Set<number>();
+  for (const message of chat) {
+    if (!leafValid(message)) continue;
+    const leaf = getLeaf(message);
+    for (const member of leaf?.groupSwipes ?? []) groupedCovered.add(member.floor);
+  }
   for (let i = 0; i < chat.length; i++) {
-    if (floorInImportedRanges(i, imported)) continue;
+    if (floorInImportedRanges(i, imported) || groupedCovered.has(i)) continue;
     if (isAiFloor(chat[i]) && !leafValid(chat[i])) out.push(i);
   }
   return out;
@@ -1247,6 +1253,15 @@ async function summarizeFloorWork(
     timeStart: delta.timeStart || tag.start || undefined,
     timeEnd: delta.timeEnd || tag.end || undefined,
   }, stateBefore, options.replaceLeaf, knowledgeShown);
+  if (groupFloors.length > 1) {
+    const groupedLeaf = getLeaf(chat[lastFloor]);
+    if (groupedLeaf) {
+      groupedLeaf.groupSwipes = groupFloors.map(f => ({
+        floor: f,
+        swipe: typeof chat[f].swipe_id === 'number' ? chat[f].swipe_id : 0,
+      }));
+    }
+  }
   engineState.lastRunAt = Date.now();
 
   // 立刻反映到派生与注入;落盘走防抖(隐藏由收尾的 syncWindowHiddenState 统一负责)
