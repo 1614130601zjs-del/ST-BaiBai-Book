@@ -17,7 +17,6 @@ import { getContext, getDoNewChat, setMessageText, type STMessage } from '@/st/c
 import { toast } from '@/st/toast';
 import { apiSettings } from '@/api/settings';
 import { deriveMemory, makeLeafId, planId } from './apply';
-import { resolveKeepStart } from './engine';
 import { knowledgeId } from './knowledge';
 import { refreshInjection, renderHistoryNodes, selectHistoryNodesBefore } from './inject';
 import { latestStoryTime } from './timeTag';
@@ -59,6 +58,19 @@ function sortJson(value: unknown): unknown {
 
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(sortJson(a)) === JSON.stringify(sortJson(b));
+}
+
+/** 从聊天末尾向前取最近 N 条真实消息,系统内部楼不计数。 */
+export function resolveCarryoverStart(chat: readonly STMessage[], requestedCount = apiSettings.carryoverMessageCount): number {
+  const limit = Math.max(1, Math.min(200, Math.floor(Number(requestedCount) || 2)));
+  let found = 0;
+  for (let i = chat.length - 1; i >= 0; i--) {
+    const m = chat[i];
+    if (!m || (m.is_system && m.extra?.type)) continue;
+    found++;
+    if (found >= limit) return i;
+  }
+  return found > 0 ? chat.findIndex(m => !!m && !(m.is_system && m.extra?.type)) : chat.length;
 }
 
 function deltaHasData(delta: StoredDelta): boolean {
@@ -234,7 +246,7 @@ export function sanitizeCarryMessage(
 export function computeCarryoverPlan(): CarryoverPlan {
   const ctx = getContext();
   const chat = ctx?.chat ?? [];
-  const carryStart = resolveKeepStart(chat);
+  const carryStart = resolveCarryoverStart(chat);
 
   let carryCount = 0;
   let aiCount = 0;
@@ -290,7 +302,7 @@ export async function createNewChatWithCarryover(): Promise<boolean> {
   }
 
   // ===== 1. 在建新对话前,从源聊天提取要携带的一切(只读) =====
-  const carryStart = resolveKeepStart(sourceChat);
+  const carryStart = resolveCarryoverStart(sourceChat);
   const sourceChatId = ctx.getCurrentChatId?.() ?? null;
   const parentBundles = currentBundleHashes(); // 源聊天已携带的 bundle 哈希(将继承给新聊天)
 
