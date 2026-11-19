@@ -767,7 +767,16 @@ export function leafValid(m: STMessage | undefined): boolean {
   const leaf = getLeaf(m);
   if (!leaf || !leaf.id || !leaf.delta) return false;
   if (!m) return false;
-  return leafSwipe(leaf) === msgSwipe(m);
+  if (leafSwipe(leaf) !== msgSwipe(m)) return false;
+  if (leaf.groupSwipes?.length) {
+    const chat = getContext()?.chat;
+    if (!chat) return false;
+    return leaf.groupSwipes.every(member => {
+      const groupedMessage = chat[member.floor];
+      return !!groupedMessage && msgSwipe(groupedMessage) === member.swipe;
+    });
+  }
+  return true;
 }
 
 /* ============ 重放引擎 ============ */
