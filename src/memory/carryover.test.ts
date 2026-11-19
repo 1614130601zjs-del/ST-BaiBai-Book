@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { STMessage } from '@/st/context';
-import { sanitizeCarryMessage } from './carryover';
+import { resolveCarryoverStart, sanitizeCarryMessage } from './carryover';
 
 describe('新开聊天搬运窗口楼层', () => {
+  it('按配置只截取最近 N 条真实消息,系统内部楼不计数', () => {
+    const chat = [
+      { is_user: true, mes: '旧用户' },
+      { is_user: false, mes: '旧 AI' },
+      { is_system: true, extra: { type: 'meta' }, mes: '系统楼' },
+      { is_user: true, mes: '最新用户' },
+      { is_user: false, mes: '最新 AI' },
+    ] as unknown as STMessage[];
+    expect(resolveCarryoverStart(chat, 2)).toBe(3);
+    expect(resolveCarryoverStart(chat, 4)).toBe(0);
+    expect(resolveCarryoverStart(chat, 20)).toBe(0);
+  });
   it('窗口内对旧计划的了结/更新/重启/删除引用改指种子叶上的新 id', () => {
     const m = {
       name: '艾琳', is_user: false, is_system: true, mes: '剧情。',
